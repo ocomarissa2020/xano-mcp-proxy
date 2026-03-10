@@ -38,7 +38,6 @@ app.post("/token", express.urlencoded({ extended: true }), (req, res) => {
   });
 });
 
-// Connect to Xano upstream once on startup
 let upstreamClient = null;
 
 async function connectUpstream() {
@@ -59,8 +58,17 @@ async function connectUpstream() {
 
 connectUpstream();
 
-// Streamable HTTP endpoint for ChatGPT
+app.get("/mcp", async (req, res) => {
+  console.log("GET /mcp received");
+  res.status(200).json({
+    name: "xano-proxy",
+    version: "1.0.0",
+    capabilities: { tools: {} }
+  });
+});
+
 app.post("/mcp", async (req, res) => {
+  console.log("POST /mcp received:", JSON.stringify(req.body));
   try {
     if (!upstreamClient) {
       return res.status(503).json({ error: "Not connected to Xano yet" });
@@ -97,9 +105,5 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
-// Handle GET for SSE stream (some clients use this)
-app.get("/mcp", async (req, res) => {
-  res.status(405).json({ error: "Use POST for MCP" });
-});
-
-const PORT = process.env
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Running on port ${PORT}`));
