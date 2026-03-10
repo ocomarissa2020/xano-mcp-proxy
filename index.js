@@ -17,7 +17,7 @@ app.options("*", (req, res) => {
 
 // OAuth discovery endpoint
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
-  const baseUrl = `${req.protocol}://${req.get("host")}`;
+  const baseUrl = `https://${req.get("host")}`;
   res.json({
     issuer: baseUrl,
     authorization_endpoint: `${baseUrl}/authorize`,
