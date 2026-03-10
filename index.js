@@ -2,8 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { SSEClientTransport } = require('@modelcontextprotocol/sdk/client/sse.js');
-const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
+const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { ListToolsRequestSchema, CallToolRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
 
 const app = express();
@@ -38,26 +38,40 @@ app.post("/token", express.urlencoded({ extended: true }), (req, res) => {
   });
 });
 
-const transports = {};
+// Connect to Xano upstream once on startup
+let upstreamClient = null;
 
-app.get("/sse", async (req, res) => {
-  console.log("New SSE connection");
-
+async function connectUpstream() {
   try {
+    console.log("Connecting to Xano MCP...");
     const upstreamTransport = new SSEClientTransport(new URL(XANO_MCP_URL), {
       headers: { "Authorization": `Bearer ${XANO_BEARER_TOKEN}` }
     });
-
-    const upstreamClient = new Client({ name: "proxy", version: "1.0.0" }, {});
+    upstreamClient = new Client({ name: "proxy", version: "1.0.0" }, {});
     await upstreamClient.connect(upstreamTransport);
-
     const { tools } = await upstreamClient.listTools();
-    console.log("Upstream tools count:", tools.length);
+    console.log("Connected! Tools available:", tools.length);
+  } catch (err) {
+    console.error("Failed to connect to Xano:", err.message);
+    setTimeout(connectUpstream, 5000);
+  }
+}
+
+connectUpstream();
+
+// Streamable HTTP endpoint for ChatGPT
+app.post("/mcp", async (req, res) => {
+  try {
+    if (!upstreamClient) {
+      return res.status(503).json({ error: "Not connected to Xano yet" });
+    }
 
     const server = new Server(
       { name: "xano-proxy", version: "1.0.0" },
       { capabilities: { tools: {} } }
     );
+
+    const { tools } = await upstreamClient.listTools();
 
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
@@ -65,27 +79,27 @@ app.get("/sse", async (req, res) => {
       return await upstreamClient.callTool(request.params);
     });
 
-    const downstreamTransport = new SSEServerTransport("/sse/messages", res);
-    transports[downstreamTransport.sessionId] = { transport: downstreamTransport, client: upstreamClient };
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined
+    });
 
-    await server.connect(downstreamTransport);
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+
+    res.on("finish", () => {
+      transport.close();
+      server.close();
+    });
 
   } catch (err) {
-    console.error("SSE setup error:", err);
-    res.status(500).end();
+    console.error("MCP error:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-app.post("/sse/messages", async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const transport = transports[sessionId]?.transport;
-
-  if (!transport) {
-    return res.status(404).send("Session not found");
-  }
-
-  await transport.handlePostMessage(req, res);
+// Handle GET for SSE stream (some clients use this)
+app.get("/mcp", async (req, res) => {
+  res.status(405).json({ error: "Use POST for MCP" });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Running on port ${PORT}`));
+const PORT = process.env
