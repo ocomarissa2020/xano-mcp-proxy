@@ -18,6 +18,11 @@ const AUTH0_CLIENT_SECRET = process.env.AUTH0_CLIENT_SECRET;
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path} | Auth: ${(req.headers.authorization || "NONE").substring(0, 50)}`);
+  next();
+});
+
 const checkJwt = auth({
   audience: AUTH0_AUDIENCE,
   issuerBaseURL: `https://${AUTH0_DOMAIN}`,
