@@ -42,6 +42,22 @@ app.get("/.well-known/oauth-authorization-server", (req, res) => {
   });
 });
 
+app.get("/.well-known/oauth-protected-resource", (req, res) => {
+  const baseUrl = `https://${req.get("host")}`;
+  res.json({
+    resource: `${baseUrl}/mcp`,
+    authorization_servers: [baseUrl]
+  });
+});
+
+app.get("/.well-known/oauth-protected-resource/mcp", (req, res) => {
+  const baseUrl = `https://${req.get("host")}`;
+  res.json({
+    resource: `${baseUrl}/mcp`,
+    authorization_servers: [baseUrl]
+  });
+});
+
 app.get("/authorize", (req, res) => {
   const { redirect_uri, state, code_challenge, code_challenge_method } = req.query;
   const params = new URLSearchParams({
