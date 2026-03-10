@@ -34,47 +34,56 @@ app.post("/token", express.urlencoded({ extended: true }), (req, res) => {
   });
 });
 
-// SSE endpoint
 app.get("/sse", async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  try {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("Access-Control-Allow-Origin", "*");
 
-  const response = await fetch(XANO_MCP_URL, {
-    method: "GET",
-    headers: {
-      "Authorization": `Bearer ${XANO_BEARER_TOKEN}`,
-      "Accept": "text/event-stream"
-    }
-  });
+    const response = await fetch(XANO_MCP_URL, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${XANO_BEARER_TOKEN}`,
+        "Accept": "text/event-stream"
+      }
+    });
 
-  response.body.pipeTo(new WritableStream({
-    write(chunk) { res.write(chunk); },
-    close() { res.end(); }
-  }));
+    console.log("Xano SSE response status:", response.status);
+
+    response.body.pipeTo(new WritableStream({
+      write(chunk) { res.write(chunk); },
+      close() { res.end(); }
+    }));
+  } catch (err) {
+    console.error("SSE error:", err);
+    res.status(500).end();
+  }
 });
 
-// Messages endpoint
 app.post("/sse/messages", async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const response = await fetch(`${XANO_MCP_URL.replace('/sse', '')}/messages?sessionId=${sessionId}`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${XANO_BEARER_TOKEN}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(req.body)
-  });
+  try {
+    const sessionId = req.query.sessionId;
+    const xanoMessagesUrl = XANO_MCP_URL.replace('/sse', '/messages') + `?sessionId=${sessionId}`;
+    
+    console.log("Forwarding to:", xanoMessagesUrl);
 
-  const data = await response.text();
-  res.status(response.status).send(data);
+    const response = await fetch(xanoMessagesUrl, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${XANO_BEARER_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(req.body)
+    });
+
+    const data = await response.text();
+    res.status(response.status).send(data);
+  } catch (err) {
+    console.error("Messages error:", err);
+    res.status(500).end();
+  }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.env(`Running on port ${PORT}`));
-```
-
-Also update Railway env `XANO_MCP_URL` back to SSE:
-```
-https://xjlq-rdqz-krf6.f2.xano.io/x2/mcp/meta/mcp/sse
+app.listen(PORT, () => console.log(`Running on port ${PORT}`));
