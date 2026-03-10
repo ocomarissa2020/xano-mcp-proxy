@@ -4,6 +4,7 @@ const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { SSEClientTransport } = require('@modelcontextprotocol/sdk/client/sse.js');
 const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
+const { ListToolsRequestSchema, CallToolRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
 
 const app = express();
 const XANO_MCP_URL = process.env.XANO_MCP_URL;
@@ -41,37 +42,34 @@ const transports = {};
 
 app.get("/sse", async (req, res) => {
   console.log("New SSE connection");
-  
+
   try {
-    // Connect to upstream Xano MCP
     const upstreamTransport = new SSEClientTransport(new URL(XANO_MCP_URL), {
       headers: { "Authorization": `Bearer ${XANO_BEARER_TOKEN}` }
     });
-    
+
     const upstreamClient = new Client({ name: "proxy", version: "1.0.0" }, {});
     await upstreamClient.connect(upstreamTransport);
-    
-    // Get tools from upstream
+
     const { tools } = await upstreamClient.listTools();
-    console.log("Upstream tools:", tools.map(t => t.name));
-    
-    // Create downstream server
+    console.log("Upstream tools count:", tools.length);
+
     const server = new Server(
       { name: "xano-proxy", version: "1.0.0" },
       { capabilities: { tools: {} } }
     );
-    
-    server.setRequestHandler({ method: "tools/list" }, async () => ({ tools }));
-    
-    server.setRequestHandler({ method: "tools/call" }, async (request) => {
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return await upstreamClient.callTool(request.params);
     });
-    
+
     const downstreamTransport = new SSEServerTransport("/sse/messages", res);
     transports[downstreamTransport.sessionId] = { transport: downstreamTransport, client: upstreamClient };
-    
+
     await server.connect(downstreamTransport);
-    
+
   } catch (err) {
     console.error("SSE setup error:", err);
     res.status(500).end();
@@ -81,11 +79,11 @@ app.get("/sse", async (req, res) => {
 app.post("/sse/messages", async (req, res) => {
   const sessionId = req.query.sessionId;
   const transport = transports[sessionId]?.transport;
-  
+
   if (!transport) {
     return res.status(404).send("Session not found");
   }
-  
+
   await transport.handlePostMessage(req, res);
 });
 
