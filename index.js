@@ -6,7 +6,7 @@ const XANO_MCP_URL = process.env.XANO_MCP_URL || "https://xjlq-rdqz-krf6.f2.xano
 const XANO_BEARER_TOKEN = process.env.XANO_BEARER_TOKEN;
 
 app.use(cors({
-  origin: "https://chatgpt.com",
+  origin: "*",
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["*"]
 }));
@@ -15,11 +15,26 @@ app.options("*", (req, res) => {
   res.sendStatus(200);
 });
 
+// OAuth discovery endpoint
+app.get("/.well-known/oauth-authorization-server", (req, res) => {
+  const baseUrl = `${req.protocol}://${req.get("host")}`;
+  res.json({
+    issuer: baseUrl,
+    authorization_endpoint: `${baseUrl}/authorize`,
+    token_endpoint: `${baseUrl}/token`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code"],
+    code_challenge_methods_supported: ["S256"]
+  });
+});
+
+// OAuth authorize
 app.get("/authorize", (req, res) => {
   const { redirect_uri, state } = req.query;
   res.redirect(`${redirect_uri}?code=xano_auth&state=${state}`);
 });
 
+// OAuth token
 app.post("/token", express.urlencoded({ extended: true }), (req, res) => {
   res.json({
     access_token: "xano_proxy_token",
@@ -28,6 +43,7 @@ app.post("/token", express.urlencoded({ extended: true }), (req, res) => {
   });
 });
 
+// Proxy to Xano MCP
 app.all("*", express.json(), async (req, res) => {
   try {
     const response = await fetch(XANO_MCP_URL, {
@@ -43,7 +59,7 @@ app.all("*", express.json(), async (req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
-    res.setHeader("Access-Control-Allow-Origin", "https://chatgpt.com");
+    res.setHeader("Access-Control-Allow-Origin", "*");
 
     response.body.pipeTo(new WritableStream({
       write(chunk) {
