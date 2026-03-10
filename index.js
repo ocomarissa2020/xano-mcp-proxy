@@ -39,39 +39,83 @@ app.post("/token", express.urlencoded({ extended: true }), (req, res) => {
 });
 
 app.get("/mcp", (req, res) => {
-  console.log("GET /mcp received");
-  res.status(200).json({
-    name: "xano-proxy",
-    version: "1.0.0",
-    capabilities: { tools: {} }
-  });
+  res.status(200).json({ name: "xano-proxy", version: "1.0.0", capabilities: { tools: {} } });
 });
 
-app.post("/mcp", async (req, res) => {
-  console.log("POST /mcp received:", req.body?.method);
-  try {
-    // Fresh connection to Xano for every request
-    const upstreamTransport = new SSEClientTransport(new URL(XANO_MCP_URL), {
-      headers: { "Authorization": `Bearer ${XANO_BEARER_TOKEN}` }
-    });
-    const upstreamClient = new Client({ name: "proxy", version: "1.0.0" }, {});
-    await upstreamClient.connect(upstreamTransport);
+// Keep one persistent upstream connection
+let upstreamClient = null;
+let cachedTools = [];
 
+async function connectUpstream() {
+  try {
+    console.log("Connecting to Xano MCP...");
+    
+    if (upstreamClient) {
+      try { await upstreamClient.close(); } catch(e) {}
+    }
+
+    const upstreamTransport = new SSEClientTransport(new URL(XANO_MCP_URL), {
+      requestInit: {
+        headers: { "Authorization": `Bearer ${XANO_BEARER_TOKEN}` }
+      }
+    });
+    
+    upstreamClient = new Client({ name: "proxy", version: "1.0.0" }, {});
+    
+    upstreamClient.onerror = (err) => {
+      console.error("Upstream error:", err.message);
+      upstreamClient = null;
+      setTimeout(connectUpstream, 3000);
+    };
+
+    await upstreamClient.connect(upstreamTransport);
     const { tools } = await upstreamClient.listTools();
-    console.log("Tools available:", tools.length);
+    cachedTools = tools;
+    console.log("Connected! Tools available:", tools.length);
+    
+  } catch (err) {
+    console.error("Failed to connect:", err.message);
+    upstreamClient = null;
+    setTimeout(connectUpstream, 5000);
+  }
+}
+
+connectUpstream();
+
+app.post("/mcp", async (req, res) => {
+  console.log("POST /mcp:", req.body?.method);
+  
+  try {
+    if (!upstreamClient) {
+      return res.status(503).json({ 
+        jsonrpc: "2.0", 
+        id: req.body?.id,
+        error: { code: -32603, message: "Not connected to Xano" } 
+      });
+    }
 
     const server = new Server(
       { name: "xano-proxy", version: "1.0.0" },
       { capabilities: { tools: {} } }
     );
 
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ 
+      tools: cachedTools 
+    }));
 
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       console.log("Calling tool:", request.params.name);
-      const result = await upstreamClient.callTool(request.params);
-      console.log("Tool result:", JSON.stringify(result).substring(0, 200));
-      return result;
+      try {
+        const result = await upstreamClient.callTool({
+          name: request.params.name,
+          arguments: request.params.arguments || {}
+        });
+        console.log("Tool result:", JSON.stringify(result).substring(0, 300));
+        return result;
+      } catch (err) {
+        console.error("Tool call error:", err.message);
+        throw err;
+      }
     });
 
     const transport = new StreamableHTTPServerTransport({
@@ -84,12 +128,13 @@ app.post("/mcp", async (req, res) => {
     res.on("finish", () => {
       transport.close();
       server.close();
-      upstreamClient.close();
     });
 
   } catch (err) {
     console.error("MCP error:", err.message);
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 
