@@ -1,13 +1,16 @@
 const express = require('express');
 const cors = require('cors');
-const app = express();
+const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
+const { SSEClientTransport } = require('@modelcontextprotocol/sdk/client/sse.js');
+const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
+const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 
+const app = express();
 const XANO_MCP_URL = process.env.XANO_MCP_URL;
 const XANO_BEARER_TOKEN = process.env.XANO_BEARER_TOKEN;
 
-app.use(cors({ origin: "*", methods: ["GET", "POST", "OPTIONS"], allowedHeaders: ["*"] }));
+app.use(cors({ origin: "*" }));
 app.use(express.json());
-app.options("*", (req, res) => res.sendStatus(200));
 
 app.get("/.well-known/oauth-authorization-server", (req, res) => {
   const baseUrl = `https://${req.get("host")}`;
@@ -34,55 +37,56 @@ app.post("/token", express.urlencoded({ extended: true }), (req, res) => {
   });
 });
 
+const transports = {};
+
 app.get("/sse", async (req, res) => {
+  console.log("New SSE connection");
+  
   try {
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-
-    const response = await fetch(XANO_MCP_URL, {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${XANO_BEARER_TOKEN}`,
-        "Accept": "text/event-stream"
-      }
+    // Connect to upstream Xano MCP
+    const upstreamTransport = new SSEClientTransport(new URL(XANO_MCP_URL), {
+      headers: { "Authorization": `Bearer ${XANO_BEARER_TOKEN}` }
     });
-
-    console.log("Xano SSE response status:", response.status);
-
-    response.body.pipeTo(new WritableStream({
-      write(chunk) { res.write(chunk); },
-      close() { res.end(); }
-    }));
+    
+    const upstreamClient = new Client({ name: "proxy", version: "1.0.0" }, {});
+    await upstreamClient.connect(upstreamTransport);
+    
+    // Get tools from upstream
+    const { tools } = await upstreamClient.listTools();
+    console.log("Upstream tools:", tools.map(t => t.name));
+    
+    // Create downstream server
+    const server = new Server(
+      { name: "xano-proxy", version: "1.0.0" },
+      { capabilities: { tools: {} } }
+    );
+    
+    server.setRequestHandler({ method: "tools/list" }, async () => ({ tools }));
+    
+    server.setRequestHandler({ method: "tools/call" }, async (request) => {
+      return await upstreamClient.callTool(request.params);
+    });
+    
+    const downstreamTransport = new SSEServerTransport("/sse/messages", res);
+    transports[downstreamTransport.sessionId] = { transport: downstreamTransport, client: upstreamClient };
+    
+    await server.connect(downstreamTransport);
+    
   } catch (err) {
-    console.error("SSE error:", err);
+    console.error("SSE setup error:", err);
     res.status(500).end();
   }
 });
 
 app.post("/sse/messages", async (req, res) => {
-  try {
-    const sessionId = req.query.sessionId;
-    const xanoMessagesUrl = XANO_MCP_URL.replace('/sse', '/messages') + `?sessionId=${sessionId}`;
-    
-    console.log("Forwarding to:", xanoMessagesUrl);
-
-    const response = await fetch(xanoMessagesUrl, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${XANO_BEARER_TOKEN}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(req.body)
-    });
-
-    const data = await response.text();
-    res.status(response.status).send(data);
-  } catch (err) {
-    console.error("Messages error:", err);
-    res.status(500).end();
+  const sessionId = req.query.sessionId;
+  const transport = transports[sessionId]?.transport;
+  
+  if (!transport) {
+    return res.status(404).send("Session not found");
   }
+  
+  await transport.handlePostMessage(req, res);
 });
 
 const PORT = process.env.PORT || 3000;
