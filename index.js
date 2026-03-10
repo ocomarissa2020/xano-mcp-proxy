@@ -34,7 +34,6 @@ app.post("/token", express.urlencoded({ extended: true }), (req, res) => {
   });
 });
 
-// Proxy to Xano Streamable HTTP endpoint
 app.post("/mcp", async (req, res) => {
   try {
     const response = await fetch(XANO_MCP_URL, {
@@ -70,13 +69,3 @@ app.post("/mcp", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Running on port ${PORT}`));
-```
-
-Also make sure your Railway `XANO_MCP_URL` variable is set to the **stream** endpoint:
-```
-https://xjlq-rdqz-krf6.f2.xano.io/x2/mcp/meta/mcp/stream
-```
-
-Commit, wait for redeploy, then try ChatGPT with:
-```
-https://xano-mcp-proxy-production.up.railway.app/mcp
